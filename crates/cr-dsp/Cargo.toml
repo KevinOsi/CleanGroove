@@ -1,0 +1,16 @@
+[package]
+name = "cr-dsp"
+description = "DSP engine replicating Brian Davies' ClickRepair algorithms"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+rayon = { workspace = true, optional = true }
+
+[features]
+default = ["parallel"]
+parallel = ["dep:rayon"]
+
+[dev-dependencies]

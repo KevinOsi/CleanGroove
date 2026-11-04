@@ -1,0 +1,23 @@
+/target
+# Local only, never published
+/scratch/
+/CLAUDE.md
+/.claude/
+**/*.rs.bk
+
+# IDE & Editor files
+.vscode/
+.idea/
+*.swp
+*.iml
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Audio stays on this machine (copyrighted test material); none is tracked.
+*.wav
+*.flac
+*.aif
+*.aiff
+*.mp3

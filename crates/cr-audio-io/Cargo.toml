@@ -1,0 +1,13 @@
+[package]
+name = "cr-audio-io"
+description = "High-fidelity audio I/O streaming (WAV, FLAC, AIFF) with 25-bit fixed-point scaling"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+cr-dsp.workspace = true
+hound.workspace = true
+symphonia.workspace = true
+thiserror.workspace = true

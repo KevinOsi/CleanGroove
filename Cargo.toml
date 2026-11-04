@@ -1,0 +1,44 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/cr-dsp",
+    "crates/cr-audio-io",
+    "crates/cr-cli",
+    "crates/cr-rt",
+    "crates/cr-gui",
+    "crates/cr-discogs",
+    "crates/cr-tracks",
+    "crates/cr-musicbrainz",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+authors = ["CleanGroove Contributors"]
+repository = "https://github.com/KevinOsi/CleanGroove"
+homepage = "https://github.com/KevinOsi/CleanGroove"
+rust-version = "1.80"
+
+[workspace.dependencies]
+# Internal crates
+cr-dsp = { path = "crates/cr-dsp" }
+cr-audio-io = { path = "crates/cr-audio-io" }
+
+# Audio file I/O
+hound = "3.5.1"
+symphonia = { version = "0.5.4", default-features = false, features = ["wav", "flac", "aiff", "pcm"] }
+
+# CLI and utilities
+clap = { version = "4.5.31", features = ["derive"] }
+indicatif = "0.17.11"
+rayon = "1.10.0"
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
+thiserror = "2.0.12"
+anyhow = "1.0.97"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1

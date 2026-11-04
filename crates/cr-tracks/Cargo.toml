@@ -1,0 +1,21 @@
+[package]
+name = "cr-tracks"
+description = "Album metadata and track splits for a whole-album rip: model, sidecar file, first guess at the splits"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+cr-dsp = { workspace = true }
+cr-discogs = { path = "../cr-discogs" }
+cr-musicbrainz = { path = "../cr-musicbrainz" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror.workspace = true
+cr-audio-io = { workspace = true }
+md-5 = "0.10"
+metaflac = "0.2.8"
+ureq = "2.10"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
+

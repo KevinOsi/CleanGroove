@@ -1,0 +1,12 @@
+pub mod analysis_panel;
+pub mod export_window;
+pub mod help;
+pub mod levels_panel;
+pub mod live_wave;
+pub mod search_window;
+pub mod settings;
+pub mod timeline;
+pub mod track_lane;
+pub mod track_overview;
+pub mod tracks_panel;
+pub mod waveform;

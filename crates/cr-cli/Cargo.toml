@@ -1,0 +1,21 @@
+[package]
+name = "cr-cli"
+description = "Command-line interface and batch restoration utility for CleanGroove"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "cleangroove-cli"
+path = "src/main.rs"
+
+[dependencies]
+cr-dsp.workspace = true
+cr-audio-io.workspace = true
+clap.workspace = true
+indicatif.workspace = true
+rayon.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+anyhow.workspace = true
