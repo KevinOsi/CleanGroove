@@ -171,9 +171,7 @@
     <div class="tune" style="margin-top:6px">
       <label title="Safeguard periodic harmonic transients (brass, reeds and voices)"><input type="checkbox" id="pitch" checked> Pitch Protection</label>
       <label title="Scan backwards in time: drum hits are compared with their own decay and left alone"><input type="checkbox" id="reverse"> Reverse</label>
-      <label>Method: <select id="method"><option value="1">Wavelet</option><option value="0">Simple</option><option value="2">Wavelet x2</option></select></label>
-      <label title="Classic follows the original methods; Enhanced reaches longer clicks (4-20 ms gouges)">Engine: <select id="engine"><option value="0">Classic</option><option value="1">Enhanced</option></select></label>
-    </div>
+      <label>Method: <select id="method"><option value="1">Wavelet</option><option value="0">Simple</option><option value="2">Wavelet x2</option></select></label>    </div>
   </div>
 </div>
 
@@ -208,6 +206,10 @@
   <div class="phead"><span id="modaltitle">RENDERING</span><span class="stat" id="modalstat"></span></div>
   <div class="progress"><div id="modalbar"></div></div>
   <p class="small label" id="modaltext" style="margin:4px 0 0"></p>
+  <div id="modaldone" class="hidden" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+    <a class="btn green" id="save" style="text-decoration:none">Save restored WAV</a>
+    <button class="btn" id="modalclose">Close</button>
+  </div>
 </div></div>
 
 <div class="modal hidden" id="help"><div class="panel">
@@ -216,6 +218,8 @@
     <b>Noise (Delta)</b>: it should be clicks, not music. <b>Analyze Album</b> grades the record and suggests settings.</p>
   <p class="small mono label" style="margin:0">Space play/pause &middot; 1 2 3 Out/In/Noise &middot; N next problem spot<br>
     + / - zoom &middot; wheel zoom &middot; Shift+wheel pan &middot; Home/End</p>
+  <p class="small label" style="margin:8px 0 0">What the web version does and its limits:
+    <a style="color:var(--accent)" href="https://github.com/KevinOsi/CleanGroove/blob/main/docs/MANUAL.md#12-cleangroove-in-your-browser" target="_blank" rel="noopener">manual, section 12</a>.</p>
 </div></div>
 
 <input id="file" type="file" accept="audio/*,.wav,.flac,.aif,.aiff" class="hidden">

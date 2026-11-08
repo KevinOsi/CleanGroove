@@ -14,6 +14,8 @@ Switch with the buttons at the top right, or View > File Mode / Live Monitor / T
 
 You cannot leave Live Monitor while a take is recording, so a take is never cut short by accident.
 
+File Mode also runs in a web browser, with nothing to install: https://kevinosi.github.io/CleanGroove/ . It is the same engine, running on your computer (the file is never uploaded), with live preview, Record Analysis, the corrections and a 24-bit WAV download. Live Monitor and Tracks are desktop only. See the manual, section 12, for what else differs.
+
 ## File Mode: restoring a recording
 
 1. File > Open Audio File (Ctrl+O).

@@ -14,13 +14,15 @@ const st = {
 
 // ---------- settings ----------
 
-const SETTINGS_IDS = ["post_on", "flip", "balance_on", "azimuth_on", "subsonic_on", "elliptical_on", "mono_sum", "dethump"];
+// Classic, as in the desktop app: Enhanced is offered once it has been checked by ear.
+const ENGINE = 0;
+const SETTINGS_IDS =["post_on", "flip", "balance_on", "azimuth_on", "subsonic_on", "elliptical_on", "mono_sum", "dethump"];
 
 function settings() {
   const c = (id) => ($(id).checked ? 1 : 0);
   const ellHz = st.analysis ? st.analysis.post.elliptical_hz : 100;
   return [
-    +$("declickn").value, +$("decracklen").value, +$("method").value, c("pitch"), c("reverse"), +$("engine").value,
+    +$("declickn").value, +$("decracklen").value, +$("method").value, c("pitch"), c("reverse"), ENGINE,
     c("post_on"), c("flip"), c("balance_on"), c("azimuth_on"), c("subsonic_on"), c("elliptical_on"), ellHz, c("mono_sum"), c("dethump"),
   ];
 }
@@ -124,6 +126,7 @@ async function loadFile(file) {
     orig: [left, right], analysis: null, range: null, cursor: 0, playhead: 0, ready: false,
   });
   st.peaks = buildPeaks(st.orig);
+  dropSaved();
   st.view = { a: 0, b: Math.min(st.total, st.sr * 15) };
   resetAnalysisPanel();
   $("drop").classList.add("hidden");
@@ -176,8 +179,7 @@ function onWorker(m) {
     draw(true);
   } else if (m.type === "rendered") {
     st.busy = null;
-    $("modal").classList.add("hidden");
-    download(m.l, m.r, m.seconds, m.levels);
+    finishRender(m.l, m.r, m.seconds, m.levels);
   } else if (m.type === "error") {
     st.busy = null;
     $("modal").classList.add("hidden");
@@ -626,12 +628,23 @@ function render() {
   $("modaltitle").textContent = "RENDERING";
   $("modaltext").textContent = "Declicking the whole file, then the corrections. Playback is paused meanwhile.";
   $("modalstat").textContent = "";
+  $("modaldone").classList.add("hidden");
+  $("modalbar").parentElement.classList.remove("hidden");
   setBar($("modalbar"), 0);
   $("modal").classList.remove("hidden");
+  dropSaved();
   st.worker.postMessage({ type: "render", settings: settings() });
 }
 
-function download(l, r, seconds, levels) {
+/** Frees the last render's file, if any. */
+function dropSaved() {
+  if (st.savedUrl) URL.revokeObjectURL(st.savedUrl);
+  st.savedUrl = null;
+}
+
+/** The render is done: build the WAV and offer it with a Save button. A download the page starts
+ *  by itself seconds after the click is often blocked by the browser; one the user clicks is not. */
+function finishRender(l, r, seconds, levels) {
   // 24-bit WAV. With corrections on, the engine has already applied an album gain if they pushed
   // peaks over full scale (as the desktop does); without them, nothing goes over.
   const n = l.length, bytes = 44 + n * 6;
@@ -650,19 +663,26 @@ function download(l, r, seconds, levels) {
       o += 3;
     }
   }
-  const url = URL.createObjectURL(new Blob([buf], { type: "audio/wav" }));
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = st.file.name.replace(/\.[^.]+$/, "") + "_restored.wav";
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(url), 30000);
+  dropSaved();
+  st.savedUrl = URL.createObjectURL(new Blob([buf], { type: "audio/wav" }));
+  const name = st.file.name.replace(/\.[^.]+$/, "") + "_restored.wav";
+  const a = $("save");
+  a.href = st.savedUrl;
+  a.download = name;
+  a.textContent = `Save ${name} (${(bytes / 1048576).toFixed(0)} MB)`;
   const speed = n / st.sr / Math.max(seconds, 1e-3);
   const [peak, tp, lufs, gain] = levels || [];
   const lv = Number.isFinite(peak)
     ? ` Last render: peak ${peak.toFixed(1)} dBFS, true peak ${tp.toFixed(1)} dBTP, ${lufs.toFixed(1)} LUFS${gain < 0 ? `, gain ${gain.toFixed(1)} dB` : ""}.`
     : "";
-  status(`Rendered in ${seconds.toFixed(1)} s (${speed.toFixed(1)}x real time) and downloaded as ${a.download}.` + lv +
-    (clipped ? ` ${clipped} samples were clipped at full scale.` : ""));
+  const done = `Rendered in ${seconds.toFixed(1)} s (${speed.toFixed(1)}x real time).` + lv +
+    (clipped ? ` ${clipped} samples were clipped at full scale.` : "");
+  $("modaltitle").textContent = "RENDER COMPLETE";
+  $("modalstat").textContent = "";
+  $("modaltext").textContent = `${done} The file goes to your browser's downloads (or where it asks you to save it).`;
+  $("modalbar").parentElement.classList.add("hidden");
+  $("modaldone").classList.remove("hidden");
+  status(done);
 }
 
 // ---------- helpers ----------
@@ -692,7 +712,7 @@ document.body.addEventListener("drop", (e) => {
 
 bindSlider("declick");
 bindSlider("decrackle");
-for (const id of ["pitch", "reverse", "method", "engine", ...SETTINGS_IDS]) $(id).onchange = settingsChanged;
+for (const id of ["pitch", "reverse", "method", ...SETTINGS_IDS]) $(id).onchange = settingsChanged;
 $("preset").onchange = () => { applyPreset($("preset").value); $("preset").value = ""; };
 $("play").onclick = play;
 $("pause").onclick = pause;
@@ -707,6 +727,8 @@ $("analyze").onclick = analyze;
 $("render").onclick = render;
 $("helpbtn").onclick = () => $("help").classList.remove("hidden");
 $("helpclose").onclick = () => $("help").classList.add("hidden");
+$("modalclose").onclick = () => $("modal").classList.add("hidden");
+$("save").onclick = () => setTimeout(() => status(`Saved ${$("save").download} to your downloads.`), 0);
 
 const frameAt = (e, c, a, b) => { const r = c.getBoundingClientRect(); return a + ((e.clientX - r.left) / r.width) * (b - a); };
 $("wave").onpointerdown = (e) => { if (st.orig) seek(frameAt(e, $("wave"), st.view.a, st.view.b)); };
