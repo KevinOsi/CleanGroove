@@ -17,6 +17,7 @@ Contents:
 9. [Files CleanGroove writes](#9-files-cleangroove-writes)
 10. [Troubleshooting](#10-troubleshooting)
 11. [Known limitations](#11-known-limitations)
+12. [CleanGroove in your browser](#12-cleangroove-in-your-browser)
 
 ---
 
@@ -385,3 +386,74 @@ A File Mode render: one WAV, by default `name_repaired.wav`.
 - Opening a file and drawing the repair preview run on the interface thread; the window can
   pause briefly on large files. (Analysis and rendering run in the background.)
 - macOS is untested.
+
+## 12. CleanGroove in your browser
+
+Try it without installing anything: **https://kevinosi.github.io/CleanGroove/**
+
+The web version is File Mode in a browser tab. It runs CleanGroove's own engine, compiled to
+WebAssembly, on your computer: the file you open is never uploaded, and nothing is stored once
+you close the tab.
+
+### What it does
+
+- **Open a recording**: drop a WAV or FLAC file on the page, or use Open. The browser decodes it at
+  its own sample rate. MP3 and other lossy files open too, but they smear clicks, so they are a
+  poor test.
+- **Live preview**: Play, and hear the restoration as it plays. Out (Clean), In (Bypass) and
+  Noise (Delta) switch mid-play (keys 1, 2, 3), and changes to DeClick, DeCrackle, the method or
+  the corrections are heard within a fraction of a second. Click the waveform to jump.
+- **Waveform**: the full-file timeline at the top (drag it to move the view), and the left and
+  right channels below, original in violet and restored in green. At 30 s or closer, the
+  repairs in view are previewed with a marker for each, as in the desktop app. The mouse wheel
+  zooms; Shift and the wheel pans.
+- **Record Analysis**: Analyze Album grades the record, maps its exposed clicks, measures
+  levels and channels, lists problem spots (N jumps to the next) and suggests settings; Apply
+  sets them. Corrections (polarity, balance, azimuth, subsonic, elliptical EQ, Stereo>Mono, and
+  needle-thump repair when the analysis finds thumps) work as in section 4.
+- **Render & Download**: declicks the whole file, then the thump repair and the corrections, in
+  the same order as the desktop app, including its level check (one gain for the whole file if
+  the corrections push peaks over full scale). The result downloads as a 24-bit WAV.
+- **Presets**: the three desktop presets, from the Presets list.
+
+### How it compares with the desktop app
+
+Same engine, same settings, same results, to within the last bit: on test recordings the
+analysis gives the same figures, and a 24-bit render with corrections matches the command-line
+tool to within one 24-bit step (about -138 dBFS). Tiny differences come from the browser's own
+maths functions rounding differently in the last bit; untouched audio is identical.
+
+### Limitations
+
+- **File Mode only.** Live Monitor (recording from a turntable) and Tracks (splitting and
+  tagging) are in the desktop app.
+- **One job at a time.** Analysis and rendering pause playback while they run. Expect roughly
+  30-50x real time, depending on the computer: about half a minute for a 20-minute side.
+- **Memory.** The browser holds the whole file several times over: allow about 1.5-2 GB for a
+  full LP side. Fine on a computer; long files may not open on a phone or tablet.
+- **Output format.** Downloads are 24-bit WAV, stereo (a mono file is played and saved as two
+  identical channels). FLAC export and tagging are in the desktop app.
+- **Sample rate.** Playback runs at the file's own rate. If a browser cannot, the page says it
+  resampled the file; the render then works on the resampled audio.
+- **Nothing is kept.** Settings, analysis and renders are lost when the tab closes.
+- **Browsers.** Tested in Chromium-based browsers (Chrome, Edge). Firefox and Safari should work
+  but are not tested yet.
+
+### Running it from a copy of the source
+
+To try a change, or to use it without an internet connection, build it and serve the `web`
+folder from your own computer (the page needs a web server; opening `index.html` from disk
+does not work):
+
+    rustup target add wasm32-unknown-unknown
+    sh web/build.sh
+    python3 -m http.server -d web 8000
+
+On Windows, in PowerShell:
+
+    rustup target add wasm32-unknown-unknown
+    powershell -ExecutionPolicy Bypass -File web\build.ps1
+    python -m http.server -d web 8000
+
+Then open http://localhost:8000. The first command is needed once; run the build again after
+changing the engine or pulling a new version.

@@ -31,7 +31,7 @@ jobs:
       - name: Collect the site
         run: |
           mkdir site
-          cp web/index.html web/app.js web/worker.js web/cr_wasm.wasm web/icon_256.png site/
+          cp web/index.html web/app.js web/worker.js web/player.js web/cr_wasm.wasm web/icon_256.png site/
       - uses: actions/upload-pages-artifact@v3
         with:
           path: site

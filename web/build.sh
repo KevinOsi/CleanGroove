@@ -1,7 +1,7 @@
 #!/bin/sh
 # Builds the web demo into web/: the engine as WebAssembly, plus the icon.
 #   rustup target add wasm32-unknown-unknown   (once)
-#   sh web/build.sh
+#   sh web/build.sh            (Windows PowerShell: webuild.ps1)
 # Then serve the web/ folder with any static server, for example:
 #   python3 -m http.server -d web 8000
 set -e

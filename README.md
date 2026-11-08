@@ -34,6 +34,10 @@ not affiliated with or endorsed by the author or rights holders of ClickRepair. 
 - **Command line**: `cleangroove-cli` restores files in batch; `cleangroove-rt` monitors and records without the
   GUI.
 
+**Try it in your browser:** https://kevinosi.github.io/CleanGroove/ runs the same engine on your
+own computer (nothing is uploaded): live preview, record analysis with suggested settings,
+corrections and a 24-bit download. Live Monitor and Tracks are in the desktop app.
+
 ## Where it is going
 
 CleanGroove is always working to improve on these methods, and new tools and better results are
