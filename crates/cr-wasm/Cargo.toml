@@ -1,0 +1,15 @@
+[package]
+name = "cr-wasm"
+description = "CleanGroove's offline engine for the browser (WebAssembly)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# No rayon: browser WebAssembly has no threads without cross-origin isolation.
+cr-dsp = { path = "../cr-dsp", default-features = false }
