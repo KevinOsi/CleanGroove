@@ -2,6 +2,9 @@
 "use strict";
 
 const $ = (id) => document.getElementById(id);
+// Release tag, stamped into index.html by the deploy: every file this page loads carries it, so
+// after an update a browser fetches the new set rather than mixing cached and new files.
+const BUILD = new URL(document.currentScript.src).searchParams.get("v") || "dev";
 const PREVIEW_MAX_SECONDS = 30;   // repairs are previewed on the waveform at this zoom or closer (as the desktop)
 const PEAK_BLOCK = 256;           // frames per precomputed min/max block
 
@@ -24,6 +27,7 @@ function settings() {
   return [
     +$("declickn").value, +$("decracklen").value, +$("method").value, c("pitch"), c("reverse"), ENGINE,
     c("post_on"), c("flip"), c("balance_on"), c("azimuth_on"), c("subsonic_on"), c("elliptical_on"), ellHz, c("mono_sum"), c("dethump"),
+    st.analysis ? st.analysis.balance_db : 0, st.analysis ? st.analysis.azimuth_us : 0,
   ];
 }
 
@@ -32,9 +36,23 @@ function settingsChanged() {
   $("elliptical_on").disabled = $("mono_sum").checked;
   updateSuggestMatch();
   if (!st.ready) return;
-  if (st.playing) st.node.port.postMessage({ type: "restart", settings: settings() });
+  if (st.playing) restartSoon();
   else st.worker.postMessage({ type: "settings", settings: settings() });
-  scheduleRange();
+  scheduleRange(150);
+}
+
+/** While a slider moves, restart the preview at most every RESTART_MS, always with the latest
+ *  settings: each restart pre-rolls the engine, and a restart per slider step kept the worker
+ *  busy enough to starve playback. */
+const RESTART_MS = 120;
+function restartSoon() {
+  if (st.restartTimer) { st.restartPending = true; return; }
+  st.node.port.postMessage({ type: "restart", settings: settings() });
+  st.restartTimer = setTimeout(() => {
+    st.restartTimer = 0;
+    if (st.restartPending && st.playing) { st.restartPending = false; restartSoon(); }
+    st.restartPending = false;
+  }, RESTART_MS);
 }
 
 function setValue(id, v) {
@@ -94,7 +112,7 @@ async function ensureAudio(rate) {
   } catch (e) {
     st.ctx = new AudioContext({ latencyHint: "playback" });
   }
-  await st.ctx.audioWorklet.addModule("player.js");
+  await st.ctx.audioWorklet.addModule(`player.js?v=${BUILD}`);
   st.node = new AudioWorkletNode(st.ctx, "cleangroove-player", { outputChannelCount: [2] });
   st.node.connect(st.ctx.destination);
   st.node.port.onmessage = (ev) => onPlayer(ev.data);
@@ -146,8 +164,23 @@ async function loadFile(file) {
 }
 
 function startWorker() {
-  st.worker = new Worker("worker.js");
+  st.worker = new Worker(`worker.js?v=${BUILD}`);
   st.worker.onmessage = (ev) => onWorker(ev.data);
+  // A second engine for the waveform preview, so drawing never holds up playback.
+  st.viewWorker = new Worker(`worker.js?v=${BUILD}`);
+  st.viewWorker.onmessage = (ev) => onView(ev.data);
+}
+
+function onView(m) {
+  st.viewBusy = false;
+  if (m.type === "range" && m.id === st.rangeId) {
+    st.range = { a: m.start, l: m.l, r: m.r, markers: m.markers };
+    $("viewstat").textContent = `${m.markers.length / 3} repairs in view`;
+    draw(true);
+  } else if (m.type === "error") {
+    $("viewstat").textContent = "Preview failed";
+  }
+  if (st.viewPending) { st.viewPending = false; sendRange(); }
 }
 
 function onWorker(m) {
@@ -172,14 +205,9 @@ function onWorker(m) {
     status(`Analysis complete in ${m.seconds.toFixed(1)} s: ${m.analysis.condition}. ${m.analysis.spots.length} problem spots.`);
     scheduleRange(0);
     draw(true);
-  } else if (m.type === "range") {
-    if (m.id !== st.rangeId) return;
-    st.range = { a: m.start, l: m.l, r: m.r, markers: m.markers };
-    $("viewstat").textContent = `${m.markers.length / 3} repairs in view`;
-    draw(true);
   } else if (m.type === "rendered") {
     st.busy = null;
-    finishRender(m.l, m.r, m.seconds, m.levels);
+    finishRender(m.wav, m.frames, m.clipped, m.seconds, m.levels);
   } else if (m.type === "error") {
     st.busy = null;
     $("modal").classList.add("hidden");
@@ -265,11 +293,29 @@ function scheduleRange(delay = 250) {
     $("viewstat").textContent = `Zoom in to ${PREVIEW_MAX_SECONDS} s or less to preview repairs`;
     return;
   }
-  st.rangeTimer = setTimeout(() => {
-    if (st.busy) return;
-    st.rangeId++;
-    st.worker.postMessage({ type: "range", id: st.rangeId, start: Math.floor(st.view.a), len: Math.ceil(len), settings: settings() });
-  }, delay);
+  st.rangeTimer = setTimeout(sendRange, delay);
+}
+
+/** One preview in flight at a time; a request made meanwhile is sent, with the latest view and
+ *  settings, when it returns. */
+function sendRange() {
+  if (st.viewBusy) { st.viewPending = true; return; }
+  const start = Math.floor(st.view.a), len = Math.ceil(st.view.b - st.view.a);
+  if (len > PREVIEW_MAX_SECONDS * st.sr) return;
+  // The stretch the engine needs: warm-up and the corrections' context before the view, room for
+  // its look-ahead and the context after it. The preview is then the same as over the whole file.
+  const dec = st.sr > 96000 ? 4 : st.sr > 48000 ? 2 : 1;
+  const a = Math.max(0, start - 8192 * dec - st.sr), b = Math.min(st.total, start + len + 2 * st.sr + 16384);
+  const l = st.orig[0].slice(a, b), r = st.orig[1].slice(a, b);
+  const spans = (st.analysis && st.analysis.thump_spans) || [];
+  const thumps = [];
+  for (let i = 0; i < spans.length; i += 2) {
+    if (spans[i + 1] > a && spans[i] < b) thumps.push(Math.max(0, spans[i] - a), Math.min(b - a, spans[i + 1] - a));
+  }
+  st.rangeId++;
+  st.viewBusy = true;
+  st.viewWorker.postMessage({ type: "slice", id: st.rangeId, sampleRate: st.sr, left: l, right: r, offset: a, start, len,
+    settings: settings(), thumps: new Uint32Array(thumps) }, [l.buffer, r.buffer]);
 }
 
 // ---------- drawing ----------
@@ -633,7 +679,7 @@ function render() {
   setBar($("modalbar"), 0);
   $("modal").classList.remove("hidden");
   dropSaved();
-  st.worker.postMessage({ type: "render", settings: settings() });
+  st.worker.postMessage({ type: "render", settings: settings(), sampleRate: st.sr });
 }
 
 /** Frees the last render's file, if any. */
@@ -642,27 +688,13 @@ function dropSaved() {
   st.savedUrl = null;
 }
 
-/** The render is done: build the WAV and offer it with a Save button. A download the page starts
+/** The render is done: offer its WAV with a Save button. A download the page starts
  *  by itself seconds after the click is often blocked by the browser; one the user clicks is not. */
-function finishRender(l, r, seconds, levels) {
-  // 24-bit WAV. With corrections on, the engine has already applied an album gain if they pushed
-  // peaks over full scale (as the desktop does); without them, nothing goes over.
-  const n = l.length, bytes = 44 + n * 6;
-  const buf = new ArrayBuffer(bytes), v = new DataView(buf), u8 = new Uint8Array(buf);
-  const str = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
-  str(0, "RIFF"); v.setUint32(4, bytes - 8, true); str(8, "WAVE");
-  str(12, "fmt "); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 2, true);
-  v.setUint32(24, st.sr, true); v.setUint32(28, st.sr * 6, true); v.setUint16(32, 6, true); v.setUint16(34, 24, true);
-  str(36, "data"); v.setUint32(40, n * 6, true);
-  let o = 44, clipped = 0;
-  for (let i = 0; i < n; i++) {
-    for (const ch of [l, r]) {
-      let s = Math.round(ch[i] * 8388608);
-      if (s > 8388607) { s = 8388607; clipped++; } else if (s < -8388607) { s = -8388607; clipped++; }
-      u8[o] = s & 255; u8[o + 1] = (s >> 8) & 255; u8[o + 2] = (s >> 16) & 255;
-      o += 3;
-    }
-  }
+function finishRender(buf, n, clipped, seconds, levels) {
+  // A 24-bit WAV, built by the worker as the output arrived. With corrections on, the engine has
+  // already applied an album gain if they pushed peaks over full scale (as the desktop does);
+  // without them, nothing goes over.
+  const bytes = buf.byteLength;
   dropSaved();
   st.savedUrl = URL.createObjectURL(new Blob([buf], { type: "audio/wav" }));
   const name = st.file.name.replace(/\.[^.]+$/, "") + "_restored.wav";
