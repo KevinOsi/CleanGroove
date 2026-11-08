@@ -21,3 +21,7 @@ Thumbs.db
 *.aif
 *.aiff
 *.mp3
+
+# Web demo build output (made by web/build.sh)
+/web/cr_wasm.wasm
+/web/icon_256.png

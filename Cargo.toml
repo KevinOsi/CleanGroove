@@ -9,6 +9,7 @@ members = [
     "crates/cr-discogs",
     "crates/cr-tracks",
     "crates/cr-musicbrainz",
+    "crates/cr-wasm",
 ]
 
 [workspace.package]

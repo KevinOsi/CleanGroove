@@ -1235,6 +1235,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "cr-wasm"
+version = "0.1.0"
+dependencies = [
+ "cr-dsp",
+]
+
+[[package]]
 name = "crc32fast"
 version = "1.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"

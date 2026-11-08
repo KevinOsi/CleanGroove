@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CleanGroove Web Demo</title>
+<meta name="description" content="Remove clicks from vinyl recordings in your browser. Your audio never leaves your computer.">
+<link rel="icon" href="icon_256.png">
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --text: #1d2330; --dim: #5d6677; --line: #dde1e8;
+    --accent: #0f9d76; --accent-text: #ffffff; --wave: #8a93a6; --repair: #d64545; --head: #1d2330;
+    --track: #e7eaf0;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12151b; --panel: #1b2029; --text: #e6e9ef; --dim: #9aa3b5; --line: #2c3340;
+      --accent: #34d399; --accent-text: #0b1410; --wave: #6b7488; --repair: #ff6b6b; --head: #e6e9ef;
+      --track: #262c37;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 960px; margin: 0 auto; padding: 24px 16px 48px; }
+  header { display: flex; align-items: center; gap: 14px; margin-bottom: 8px; }
+  header img { width: 48px; height: 48px; }
+  h1 { font-size: 26px; margin: 0; }
+  .lede { color: var(--dim); margin: 4px 0 20px; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+  .drop { border: 2px dashed var(--line); border-radius: 10px; padding: 28px 16px; text-align: center; cursor: pointer; }
+  .drop.over { border-color: var(--accent); }
+  .drop strong { display: block; font-size: 17px; margin-bottom: 4px; }
+  .muted { color: var(--dim); font-size: 13px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px 20px; }
+  label { display: block; font-size: 13px; color: var(--dim); margin-bottom: 4px; }
+  select, input[type=range] { width: 100%; }
+  select { padding: 6px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel); color: var(--text); font: inherit; }
+  .checks { display: flex; gap: 18px; flex-wrap: wrap; align-items: center; }
+  .checks label { display: inline-flex; gap: 6px; align-items: center; color: var(--text); font-size: 14px; margin: 0; }
+  button { font: inherit; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--text);
+    padding: 8px 14px; cursor: pointer; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); font-weight: 600; }
+  button:disabled { opacity: .5; cursor: default; }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  .seg button { border: 0; border-radius: 0; border-right: 1px solid var(--line); }
+  .seg button:last-child { border-right: 0; }
+  .seg button.on { background: var(--accent); color: var(--accent-text); font-weight: 600; }
+  .bar { height: 8px; background: var(--track); border-radius: 4px; overflow: hidden; margin: 10px 0 4px; }
+  .bar > div { height: 100%; width: 0; background: var(--accent); transition: width .1s; }
+  canvas { display: block; width: 100%; height: 140px; border-radius: 6px; background: var(--track); cursor: pointer; touch-action: none; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-top: 12px; }
+  .stat { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+  .stat b { display: block; font-size: 18px; }
+  .time { font-variant-numeric: tabular-nums; color: var(--dim); font-size: 13px; }
+  .hidden { display: none; }
+  .legend { display: flex; gap: 16px; font-size: 12px; color: var(--dim); margin-top: 6px; flex-wrap: wrap; }
+  .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+  footer { color: var(--dim); font-size: 13px; margin-top: 24px; }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <img src="icon_256.png" alt="">
+    <div><h1>CleanGroove</h1></div>
+  </header>
+  <p class="lede">Remove clicks from a vinyl recording, right in your browser. Your audio is processed on
+    your own computer and never uploaded.</p>
+
+  <section class="panel">
+    <div id="drop" class="drop" tabindex="0" role="button" aria-label="Choose an audio file">
+      <strong>Drop a recording here, or click to choose</strong>
+      <span class="muted">WAV or FLAC works best (MP3 and others play, but lossy files smear clicks). A few minutes is plenty for a demo.</span>
+    </div>
+    <input id="file" type="file" accept="audio/*,.wav,.flac,.aif,.aiff" class="hidden">
+    <p id="fileinfo" class="muted" style="margin:10px 0 0"></p>
+  </section>
+
+  <section class="panel">
+    <div class="grid">
+      <div>
+        <label for="preset">Record type</label>
+        <select id="preset">
+          <option value="0">Stereo LP</option>
+          <option value="1">Mono LP</option>
+          <option value="2">Shellac 78</option>
+        </select>
+      </div>
+      <div>
+        <label for="declick">DeClick: <span id="declickv">30</span></label>
+        <input id="declick" type="range" min="0" max="100" value="30">
+      </div>
+      <div>
+        <label for="decrackle">DeCrackle: <span id="decracklev">0</span></label>
+        <input id="decrackle" type="range" min="0" max="100" value="0">
+      </div>
+      <div>
+        <label for="method">Method</label>
+        <select id="method">
+          <option value="1">Wavelet</option>
+          <option value="2">Wavelet x2 (longer clicks)</option>
+          <option value="0">Simple</option>
+        </select>
+      </div>
+    </div>
+    <div class="checks" style="margin-top:12px">
+      <label><input id="pitch" type="checkbox" checked> Pitch protection</label>
+      <label><input id="reverse" type="checkbox"> Reverse scan</label>
+      <label><input id="enhanced" type="checkbox"> Enhanced engine</label>
+    </div>
+    <div class="row" style="margin-top:14px">
+      <button id="run" class="primary" disabled>Restore</button>
+      <span id="status" class="muted"></span>
+    </div>
+    <div id="progress" class="bar hidden"><div></div></div>
+  </section>
+
+  <section id="result" class="panel hidden">
+    <div class="row" style="justify-content:space-between">
+      <div class="row">
+        <button id="play">Play</button>
+        <div class="seg" role="group" aria-label="What to hear">
+          <button data-mode="orig">Original</button>
+          <button data-mode="rest" class="on">Restored</button>
+          <button data-mode="diff">Removed</button>
+        </div>
+      </div>
+      <span id="clock" class="time">0:00 / 0:00</span>
+    </div>
+    <p class="muted" style="margin:8px 0">Switch while it plays: the three stay in step. "Removed" is the
+      original minus the restored audio, so you hear only what was taken out. It should be clicks, not music.</p>
+    <canvas id="wave" aria-label="Waveform; click to play from a point"></canvas>
+    <div class="legend"><span><i style="background:var(--wave)"></i>Original</span>
+      <span><i style="background:var(--repair)"></i>Repairs (darker: more of them)</span>
+      <span>Click the waveform to play from there.</span></div>
+    <div class="stats" id="stats"></div>
+    <div class="row" style="margin-top:14px">
+      <button id="download">Download restored WAV (24-bit)</button>
+      <button id="nextrepair">Jump to next repair</button>
+    </div>
+  </section>
+
+  <footer>
+    CleanGroove's offline engine compiled to WebAssembly, the same code as the desktop program. The desktop
+    program adds record analysis, suggested settings, corrections, needle-thump repair, live monitoring and
+    track splitting. <a href="https://github.com/KevinOsi/CleanGroove">CleanGroove on GitHub</a>.
+  </footer>
+</main>
+<script src="app.js"></script>
+</body>
+</html>
