@@ -430,7 +430,9 @@ maths functions rounding differently in the last bit; untouched audio is identic
 - **One job at a time.** Analysis and rendering pause playback while they run. Expect roughly
   30-50x real time, depending on the computer: about half a minute for a 20-minute side.
 - **Memory.** The browser holds the whole file several times over: allow about 1.5-2 GB for a
-  full LP side. Fine on a computer; long files may not open on a phone or tablet.
+  full LP side, about 3 GB for a 35-minute album at 44.1 kHz. The engine itself can use at most
+  4 GB, which is roughly 90 minutes at 44.1 kHz or 40 minutes at 96 kHz; split anything longer.
+  Fine on a computer; long files may not open on a phone or tablet.
 - **Output format.** Downloads are 24-bit WAV, stereo (a mono file is played and saved as two
   identical channels). FLAC export and tagging are in the desktop app.
 - **Sample rate.** Playback runs at the file's own rate. If a browser cannot, the page says it

@@ -29,12 +29,16 @@ use stream::Stream;
 const ROUNDOFF: i32 = 2;
 /// Internal full scale (24-bit PCM << 1).
 const FULL_SCALE: f64 = 16_777_216.0;
+/// Frames per block of render output handed to the page.
+const EMIT_FRAMES: usize = 65_536;
 
 #[cfg(target_arch = "wasm32")]
 #[link(wasm_import_module = "env")]
 extern "C" {
     /// The page's progress callback: (stage, fraction). Stage 1 analysis, 2 render.
     fn cg_progress(stage: u32, fraction: f32);
+    /// The page takes a block of render output: (pass, pointer to interleaved f32, samples).
+    fn cg_emit(pass: u32, ptr: *const f32, len: u32);
 }
 
 fn progress(stage: u32, fraction: f32) {
@@ -67,6 +71,10 @@ pub struct Settings {
     pub mono_sum: bool,
     /// Needle-thump repair over the series the analysis found.
     pub dethump: bool,
+    /// Measured balance and azimuth to correct (from the analysis; the page passes them so a
+    /// session holding only a slice of the file corrects the same way).
+    pub balance_db: f64,
+    pub azimuth_us: f64,
 }
 
 /// A loaded file and everything done with it.
@@ -78,6 +86,9 @@ pub struct Session {
     settings: Settings,
     analysis: Option<AlbumAnalysis>,
     report: Option<AutoTuneReport>,
+    /// Thump spans given by the page (a session holding a slice has no analysis of its own).
+    thumps_given: Option<Vec<(usize, usize)>>,
+    thump_buf: Vec<u32>,
     text: String,
     stream: Option<Stream>,
     /// Stream output: original, declicked, final, per channel.
@@ -85,7 +96,6 @@ pub struct Session {
     range_out: [Vec<f32>; 2],
     range_markers: Vec<u32>,
     render: Option<Render>,
-    out: [Vec<f32>; 2],
     /// Last render: sample peak dBFS, true peak dBTP, loudness LUFS, album gain dB (NaN without
     /// corrections).
     levels: [f64; 4],
@@ -109,13 +119,14 @@ impl Session {
             settings: Settings { declick: 30, method: 1, pitch: true, post_on: true, elliptical_hz: 100.0, ..Default::default() },
             analysis: None,
             report: None,
+            thumps_given: None,
+            thump_buf: Vec::new(),
             text: String::new(),
             stream: None,
             st: Default::default(),
             range_out: Default::default(),
             range_markers: Vec::new(),
             render: None,
-            out: Default::default(),
             levels: [f64::NAN; 4],
         }
     }
@@ -155,18 +166,16 @@ impl Session {
         p
     }
 
-    /// Corrections for the current settings (identity when switched off). Balance and azimuth
-    /// use the analysis' measurements.
+    /// Corrections for the current settings (identity when switched off).
     pub fn post(&self) -> PostSettings {
         let s = &self.settings;
         if !s.post_on {
             return PostSettings::default();
         }
-        let ch = self.analysis.as_ref().map(|a| &a.channels);
         PostSettings {
             flip_right_polarity: s.flip,
-            balance_db: if s.balance_on { ch.map_or(0.0, |c| c.balance_db) } else { 0.0 },
-            azimuth_us: if s.azimuth_on { ch.map_or(0.0, |c| c.azimuth_us) } else { 0.0 },
+            balance_db: if s.balance_on { s.balance_db } else { 0.0 },
+            azimuth_us: if s.azimuth_on { s.azimuth_us } else { 0.0 },
             subsonic_hz: s.subsonic_on.then_some(SUBSONIC_HZ),
             elliptical_hz: (s.elliptical_on && !s.mono_sum).then_some(s.elliptical_hz),
             mono_sum: s.mono_sum,
@@ -175,10 +184,19 @@ impl Session {
     }
 
     fn thump_spans(&self) -> Arc<Vec<(usize, usize)>> {
-        match (&self.analysis, self.settings.dethump) {
-            (Some(a), true) => Arc::new(cr_dsp::thump::thump_spans(&a.thumps, self.sample_rate)),
+        if !self.settings.dethump {
+            return Arc::new(Vec::new());
+        }
+        match (&self.thumps_given, &self.analysis) {
+            (Some(t), _) => Arc::new(t.clone()),
+            (None, Some(a)) => Arc::new(cr_dsp::thump::thump_spans(&a.thumps, self.sample_rate)),
             _ => Arc::new(Vec::new()),
         }
+    }
+
+    /// Thump spans to repair, as frame ranges of this session's audio.
+    pub fn set_thumps(&mut self, spans: Vec<(usize, usize)>) {
+        self.thumps_given = Some(spans);
     }
 
     // ---------- analysis ----------
@@ -255,7 +273,6 @@ impl Session {
 
     pub fn render_begin(&mut self) {
         let total = self.frames.len();
-        self.out = Default::default();
         self.render = Some(Render {
             processor: Processor::new(self.params(), self.sample_rate, Some(total)),
             next_in: 0,
@@ -281,53 +298,58 @@ impl Session {
     }
 
     /// Finishes the render: engine delay, then the thump repair and the corrections, in the
-    /// command-line tool's order. Returns the number of frames.
-    pub fn render_finish(&mut self) -> usize {
+    /// command-line tool's order. The output goes to `emit` in blocks of interleaved samples
+    /// (left, right, ...) as `emit(pass, block)`, so the whole output is never held here: a long
+    /// album would not fit the browser's memory. A pass after the first starts the output over
+    /// (the corrections run again with an album gain). Returns the number of frames.
+    pub fn render_finish(&mut self, mut emit: impl FnMut(u32, &[f32])) -> usize {
         let total = self.frames.len();
         let Some(mut r) = self.render.take() else { return 0 };
         r.declicked.extend(r.processor.flush());
         // Any frames the engine did not return stay silent, as in the command-line tool.
         r.declicked.resize(total, (0, 0));
         let mut declicked = r.declicked;
+        drop(r.processor);
         if let (Some(a), true) = (&self.analysis, self.settings.dethump) {
             cr_dsp::thump::repair_thumps(&mut declicked, self.sample_rate, &a.thumps);
         }
+        let mut buf: Vec<f32> = Vec::with_capacity(2 * EMIT_FRAMES);
         let post = self.post();
         if post.is_identity() {
-            let mut l = Vec::with_capacity(total);
-            let mut rr = Vec::with_capacity(total);
-            for &(a, b) in &declicked {
-                l.push(internal_to_f64(a) as f32);
-                rr.push(internal_to_f64(b) as f32);
+            for block in declicked.chunks(EMIT_FRAMES) {
+                buf.clear();
+                for &(a, b) in block {
+                    buf.push(internal_to_f64(a) as f32);
+                    buf.push(internal_to_f64(b) as f32);
+                }
+                emit(0, &buf);
             }
-            self.out = [l, rr];
             self.levels = [f64::NAN; 4];
             return total;
         }
         // The corrections, metered; if they pushed peaks over full scale, run them again with
         // one album gain (no limiting), as the desktop render and the command-line tool do.
         let sr = self.sample_rate;
-        let run = |settings: &PostSettings| {
-            let mut l = Vec::with_capacity(total);
-            let mut rr = Vec::with_capacity(total);
+        let mut run = |pass: u32, settings: &PostSettings| {
             let mut meter = cr_dsp::post::LevelMeter::new(sr);
             cr_dsp::post::run_post(&declicked, sr, settings, |block| {
                 meter.feed(block);
+                buf.clear();
                 for &(a, b) in block {
-                    l.push((a / FULL_SCALE) as f32);
-                    rr.push((b / FULL_SCALE) as f32);
+                    buf.push((a / FULL_SCALE) as f32);
+                    buf.push((b / FULL_SCALE) as f32);
                 }
+                emit(pass, &buf);
             });
-            ([l, rr], meter.finish())
+            meter.finish()
         };
-        let (mut out, mut report) = run(&post);
+        let mut report = run(0, &post);
         let gain_db = cr_dsp::post::album_gain_db(&report);
         if gain_db < 0.0 {
             let mut with_gain = post.clone();
             with_gain.gain_db = gain_db;
-            (out, report) = run(&with_gain);
+            report = run(1, &with_gain);
         }
-        self.out = out;
         self.levels = [report.sample_peak_dbfs, report.true_peak_dbtp, report.loudness_lufs, gain_db.min(0.0)];
         total
     }
@@ -503,6 +525,8 @@ pub fn analysis_json(a: &AlbumAnalysis, r: &AutoTuneReport) -> String {
             j.0.push_str("null");
         }
     }
+    j.key("thump_spans");
+    j.0.push_str(&list(&cr_dsp::thump::thump_spans(&a.thumps, a.sample_rate), |(x, y)| format!("{x},{y}")));
     j.key("rationale");
     j.0.push_str(&list(&r.rationale, |l| quote(l)));
     j.0.push('}');
@@ -530,11 +554,13 @@ fn settings_from(v: &[f64]) -> Settings {
         elliptical_hz: if n(12) > 0.0 { n(12) } else { 100.0 },
         mono_sum: b(13),
         dethump: b(14),
+        balance_db: n(15),
+        azimuth_us: n(16),
     }
 }
 
 /// Number of values `cg_set_settings` reads (see `settings_from` for their order).
-pub const SETTINGS_LEN: usize = 15;
+pub const SETTINGS_LEN: usize = 17;
 
 #[no_mangle]
 pub extern "C" fn cg_session_new(sample_rate: u32, total: u32) -> *mut Session {
@@ -573,6 +599,18 @@ session_fn!(
     }
 );
 session_fn!(fn cg_analyze(s) -> *const u8 { s.analyze().as_ptr() });
+session_fn!(
+    /// Space for `n` thump spans (start, end pairs of u32), read by `cg_set_thumps`.
+    fn cg_thumps_buffer(s, n: u32) -> *mut u32 {
+        s.thump_buf = vec![0; 2 * n as usize];
+        s.thump_buf.as_mut_ptr()
+    }
+);
+session_fn!(fn cg_set_thumps(s) -> u32 {
+    let spans = s.thump_buf.chunks(2).map(|c| (c[0] as usize, c[1] as usize)).collect();
+    s.set_thumps(spans);
+    0
+});
 session_fn!(fn cg_text_len(s) -> u32 { s.text.len() as u32 });
 session_fn!(fn cg_stream_start(s, start: u32) -> u32 { s.stream_start(start as usize); 0 });
 session_fn!(fn cg_stream_pull(s, n: u32) -> u32 { s.stream_pull(n as usize) as u32 });
@@ -583,8 +621,16 @@ session_fn!(fn cg_range_len(s) -> u32 { s.range_out[0].len() as u32 });
 session_fn!(fn cg_range_markers(s) -> *const u32 { s.range_markers.as_ptr() });
 session_fn!(fn cg_render_begin(s) -> u32 { s.render_begin(); 0 });
 session_fn!(fn cg_render_step(s, n: u32) -> u32 { s.render_step(n as usize) as u32 });
-session_fn!(fn cg_render_finish(s) -> u32 { s.render_finish() as u32 });
-session_fn!(fn cg_render_out(s, ch: u32) -> *const f32 { s.out[(ch as usize).min(1)].as_ptr() });
+session_fn!(fn cg_render_finish(s) -> u32 {
+    s.render_finish(|pass, block| {
+        #[cfg(target_arch = "wasm32")]
+        unsafe {
+            cg_emit(pass, block.as_ptr(), block.len() as u32)
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        let _ = (pass, block);
+    }) as u32
+});
 session_fn!(fn cg_render_levels(s) -> *const f64 { s.levels.as_ptr() });
 
 /// # Safety
@@ -632,22 +678,59 @@ mod tests {
         s
     }
 
+    /// Renders the whole session as the page receives it: blocks, with a later pass starting over.
+    fn render_all(s: &mut Session, step: usize) -> [Vec<f32>; 2] {
+        let n = s.frames.len();
+        s.render_begin();
+        while s.render_step(step) < n {}
+        let mut out: [Vec<f32>; 2] = Default::default();
+        let mut pass = 0;
+        let total = s.render_finish(|p, block| {
+            if p != pass {
+                pass = p;
+                out = Default::default();
+            }
+            for f in block.chunks(2) {
+                out[0].push(f[0]);
+                out[1].push(f[1]);
+            }
+        });
+        assert_eq!(total, n);
+        assert_eq!(out[0].len(), n, "every frame emitted once");
+        out
+    }
+
     /// The full render returns what the engine returns, frame for frame, and keeps the length.
     #[test]
     fn render_matches_the_engine() {
         let (sr, n) = (44_100, 100_000);
         let (l, r) = test_signal(sr, n);
         let mut s = session(sr, &l, &r, false);
-        s.render_begin();
-        while s.render_step(30_000) < n {}
-        assert_eq!(s.render_finish(), n);
+        let out = render_all(&mut s, 30_000);
 
         let (want, _) = Processor::process_slice_aligned(s.params(), sr, &s.frames);
         for i in 0..n {
-            assert_eq!(s.out[0][i], internal_to_f64(want[i].0) as f32, "left frame {i}");
-            assert_eq!(s.out[1][i], internal_to_f64(want[i].1) as f32, "right frame {i}");
+            assert_eq!(out[0][i], internal_to_f64(want[i].0) as f32, "left frame {i}");
+            assert_eq!(out[1][i], internal_to_f64(want[i].1) as f32, "right frame {i}");
         }
-        assert!(s.out[0].iter().zip(&l).any(|(a, b)| a != b), "the click was repaired");
+        assert!(out[0].iter().zip(&l).any(|(a, b)| a != b), "the click was repaired");
+    }
+
+    /// Corrections that push peaks over full scale run again with an album gain: the second
+    /// pass replaces the first, and the output stays within full scale.
+    #[test]
+    fn render_reruns_with_an_album_gain() {
+        let (sr, n) = (44_100, 100_000);
+        let (l, r) = test_signal(sr, n);
+        let peak = l.iter().chain(&r).fold(0.0f32, |m, v| m.max(v.abs()));
+        let (l, r): (Vec<f32>, Vec<f32>) = (l.iter().map(|v| v * 0.95 / peak).collect(), r.iter().map(|v| v * 0.95 / peak).collect());
+        let mut s = session(sr, &l, &r, true);
+        s.settings.balance_on = true;
+        s.settings.balance_db = 20.0;
+        let out = render_all(&mut s, 65_536);
+        assert!(s.levels[3] < 0.0, "an album gain was applied: {:?}", s.levels);
+        let got = out[0].iter().chain(&out[1]).fold(0.0f32, |m, v| m.max(v.abs()));
+        assert!(got <= 1.0, "peak {got}");
     }
 
     /// The live preview from a point mid-file matches the full render there: exactly without
@@ -659,16 +742,14 @@ mod tests {
         let (l, r) = test_signal(sr, n);
         for post_on in [false, true] {
             let mut s = session(sr, &l, &r, post_on);
-            s.render_begin();
-            while s.render_step(65_536) < n {}
-            s.render_finish();
+            let out = render_all(&mut s, 65_536);
             let start = 120_000;
             s.stream_start(start);
             let got = s.stream_pull(50_000);
             assert_eq!(got, 50_000);
             let mut worst = 0.0f32;
             for i in 0..got {
-                worst = worst.max((s.st[4][i] - s.out[0][start + i]).abs()).max((s.st[5][i] - s.out[1][start + i]).abs());
+                worst = worst.max((s.st[4][i] - out[0][start + i]).abs()).max((s.st[5][i] - out[1][start + i]).abs());
             }
             eprintln!("post_on {post_on}: worst difference {worst:e} ({:.1} dBFS)", 20.0 * (worst.max(1e-12) as f64).log10());
             // Without corrections: exact. With them: the filters' 1 s context cut at the seek
@@ -689,6 +770,28 @@ mod tests {
         let m = &s.range_markers;
         assert!(m.chunks(3).any(|c| c[2] == 0) && m.chunks(3).any(|c| c[2] == 1));
         assert!(m.chunks(3).all(|c| c[0] >= 20_000 && c[0] < 50_000));
+    }
+
+    /// The page previews the view from a slice of the file (warm-up and context before, room for
+    /// the look-ahead after): it must give what a session holding the whole file gives.
+    #[test]
+    fn range_from_a_slice_matches_the_whole_file() {
+        let (sr, n) = (44_100, 400_000);
+        let (l, r) = test_signal(sr, n);
+        for post_on in [false, true] {
+            let mut whole = session(sr, &l, &r, post_on);
+            let (start, len) = (200_000, 60_000);
+            let count = whole.range(start, len);
+
+            let before = stream::warm_up_frames(sr) + sr as usize;
+            let after = 2 * sr as usize + 16_384;
+            let (a, b) = (start - before, (start + len + after).min(n));
+            let mut part = session(sr, &l[a..b], &r[a..b], post_on);
+            assert_eq!(part.range(start - a, len), count, "post_on {post_on}");
+            assert_eq!(part.range_out, whole.range_out, "post_on {post_on}");
+            let shifted: Vec<u32> = part.range_markers.chunks(3).flat_map(|c| [c[0] + a as u32, c[1], c[2]]).collect();
+            assert_eq!(shifted, whole.range_markers, "post_on {post_on}");
+        }
     }
 
     #[test]

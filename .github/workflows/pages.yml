@@ -32,6 +32,9 @@ jobs:
         run: |
           mkdir site
           cp web/index.html web/app.js web/worker.js web/player.js web/cr_wasm.wasm web/icon_256.png site/
+          # Tag this release's files so browsers do not mix cached and new ones.
+          sed -i "s/app.js?v=dev/app.js?v=${GITHUB_SHA::7}/" site/index.html
+          grep -q "app.js?v=${GITHUB_SHA::7}" site/index.html
       - uses: actions/upload-pages-artifact@v3
         with:
           path: site
